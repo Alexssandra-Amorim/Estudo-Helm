@@ -6,7 +6,7 @@ Modelo Helm Charts
 
 Baixe e instale o [Helm](https://helm.sh/)
 
-Vá até o diretório de seu serviço, exemplo `services/ms-rundeck`.
+Vá até o diretório de seu serviço, exemplo `services/ms-bolinha`.
 Você pode executar os comandos abaixo para gerar os manifestos do Kubernetes e validar se todas as informações estão validas.
 
 ```sh
