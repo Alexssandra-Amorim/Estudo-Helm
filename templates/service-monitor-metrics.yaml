@@ -1,0 +1,30 @@
+{{- if $.Values.global.metrics.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    app: {{ .Values.global.app_name }}-metrics
+    monitor: prometheus
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    source: microservices
+  namespace: monitoring
+  name: {{ .Values.global.app_name }}-metrics-service-monitor
+spec:
+  endpoints:
+  - path: /metrics
+    port: exporter
+  namespaceSelector:
+    matchNames:
+    - ms-{{ $.Values.global.app_name }}
+  selector:
+    matchLabels:
+      metrics: enabled
+      {{- if (ne (or $.Values.global.metrics.useExistingServices false) true) }}
+      app: {{ .Values.global.app_name }}-metrics
+      {{- end }}
+{{- end }}

@@ -1,0 +1,40 @@
+{{- range .Values.apis }}
+{{ $api := . }}
+{{- if ($api.service).enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  {{- if $api.service.annotations }}
+  annotations:
+    {{- range $key, $value := $api.service.annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+  name: {{ $.Values.global.app_name }}-{{ $api.name }}
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+    {{- if $api.labels }}{{ toYaml $api.labels | nindent 4}}{{- end }}
+spec:
+  ports:
+  - port: {{ $api.service.port }}
+    protocol: TCP
+    targetPort: {{ $api.service.targetPort }}
+    {{- if not (empty $api.service.name) }}
+    name: {{ $api.service.name }}
+    {{- end}}
+  selector:
+    app: {{ $.Values.global.app_name }}-{{ $api.name }}
+    {{- with $api.service.labels -}}
+      {{ toYaml . | nindent 4 }}
+    {{- end }}
+  sessionAffinity: None
+  type: {{ default "ClusterIP" $api.service.type }}
+{{- end }}
+{{- end }}

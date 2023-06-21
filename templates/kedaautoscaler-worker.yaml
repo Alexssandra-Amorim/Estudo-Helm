@@ -1,0 +1,57 @@
+{{- range .Values.workers }}
+{{- $worker := . }}
+{{- if $worker.hpa.enabled }}
+{{- if eq (default "vanilla" $worker.hpa.type) "keda" }}
+
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    app: {{ $.Values.global.app_name }}
+    component: worker-horizontalpodautoscaler
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+spec:
+  scaleTargetRef:
+    name: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+  pollingInterval:  {{ $worker.hpa.pollingInterval | default 30 }}   # Optional. Default: 30 seconds
+  cooldownPeriod: {{ $worker.hpa.cooldownPeriod | default 300 }}    # Optional. Default: 300 seconds
+  minReplicaCount: {{  $worker.hpa.min }}   # Optional. Default: 0
+  maxReplicaCount: {{  $worker.hpa.max }}   # Optional. Default: 100
+  {{- if not (empty $worker.hpa.triggers) }}
+  triggers: {{ toYaml $worker.hpa.triggers | nindent 4 }}
+    - type: cpu
+      metadata:
+        value: {{ default "60" (($worker.hpa).targetCPU | quote) }}
+        type: Utilization
+    {{- if $worker.hpa.targetMemory }}
+    - type: memory
+      metadata:
+        value: {{ (($worker.hpa).targetMemory | quote) }}
+        type: Utilization
+    {{- end }}
+  {{- else }}
+  triggers:
+    - type: cpu      
+      metadata:
+        value: {{ default "60" (($worker.hpa).targetCPU | quote) }}
+        type: Utilization
+    {{- if $worker.hpa.targetMemory }}
+    - type: memory      
+      metadata:
+        value: {{ (($worker.hpa).targetMemory | quote) }}
+        type: Utilization
+    {{- end }}
+  {{- end }}
+
+
+{{- end }}
+{{- end }}
+{{- end }}

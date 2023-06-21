@@ -1,0 +1,147 @@
+{{- range .Values.cronjobs }}
+{{- $cronjob := . }}
+{{- if $cronjob.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  {{- if or ($cronjob.annotations) ($.Values.vault_annotations) }}
+  annotations:
+    {{- range $key, $value := $cronjob.annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    {{- range $key, $value := $.Values.vault_annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+  name: {{ $.Values.global.app_name }}-cronjob-{{ $cronjob.name }}
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    app: {{ $.Values.global.app_name }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+spec:
+  {{- if (hasKey $.Values.global.cronjob "historylimit") }}
+  failedJobsHistoryLimit: {{ $.Values.global.cronjob.historylimit.failed }}
+  successfulJobsHistoryLimit: {{ $.Values.global.cronjob.historylimit.successful }}
+  {{- else if (hasKey $cronjob "historylimit") }}
+  failedJobsHistoryLimit: {{ $cronjob.historylimit.failed }}
+  successfulJobsHistoryLimit: {{ $cronjob.historylimit.successful }}
+  {{- else }}
+  failedJobsHistoryLimit: 0
+  successfulJobsHistoryLimit: 0
+  {{- end }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ default 350 $cronjob.startingDeadlineSeconds }}
+  schedule: {{ $cronjob.schedule | quote }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ $cronjob.ttl | default 3600 }}
+      parallelism: {{ $cronjob.parallelism | default 1 }}
+      template:
+        metadata:
+          {{- if or ($cronjob.annotations) ($.Values.vault_annotations) }}
+          annotations:
+            {{- range $key, $value := $cronjob.annotations }}
+              {{ $key }}: {{ $value | quote }}
+            {{- end }}
+            {{- range $key, $value := $.Values.vault_annotations }}
+              {{ $key }}: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
+          labels:
+            namespace: ms-{{ $.Values.global.app_name }}
+            bu: {{ $.Values.global.bu }}
+            app: {{ $.Values.global.app_name }}
+            release: {{ $.Release.Name }}
+            releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+            managed-by: "harness"
+            backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+        spec:
+          {{- if not (empty $.Values.global.worker_roleArn) }}
+          serviceAccountName: {{ $.Values.global.app_name }}-worker-sa
+          {{- end }}
+          restartPolicy: {{ $cronjob.restartPolicy | default "OnFailure" }}
+          {{- if $cronjob.volumes}}
+          volumes:
+            {{- with $cronjob.volumes -}}
+                {{ toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end}}
+          containers:
+          - name: {{ $.Values.global.app_name }}-cronjob-{{ $cronjob.name }}
+            {{- if not $cronjob.tag }}
+            image: {{ $cronjob.image }}:{{ $.Values.global.image.tag }}
+            {{- else }}
+            image: {{ $cronjob.image }}:{{ $cronjob.tag }}
+            {{- end }}
+            {{- if $cronjob.volumeMounts }}
+            volumeMounts:
+              {{- range $cronjob.volumeMounts }}
+              - name: {{ .name }}
+                mountPath: {{ .mountPath }}
+              {{- end }}
+            {{- end }}
+            {{- if $cronjob.command }}
+            command: [ {{ $cronjob.command | quote }} ]
+            {{- end }}
+            {{- if $cronjob.args }}
+            {{- if eq (kindOf $cronjob.args) "slice" }}
+            args: {{ toJson $cronjob.args}}
+            {{- end }}
+            {{- if eq (kindOf $cronjob.args) "string" }}
+            args: [ {{ $cronjob.args | quote }} ]
+            {{- end }}
+            {{- end }}
+            env:
+            - name: APP_NAME
+              value: {{ $.Values.global.app_name }}
+            - name: APP_STAGE
+              value: {{ $.Values.global.app_stage }}
+            {{- if $cronjob.env }}{{ toYaml $cronjob.env | nindent 12}}{{- end }}
+            {{- if $cronjob.envFrom }}
+            envFrom: {{ toYaml $cronjob.envFrom | nindent 12}}
+            {{- end }}
+            resources:
+              limits:
+                cpu: {{ $cronjob.cpu }}
+                memory: {{ $cronjob.memory }}
+              requests:
+                cpu: {{ $cronjob.cpu }}
+                memory: {{ $cronjob.memory }}
+          {{- if empty $cronjob.affinity }}
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: {{ $cronjob.workloadLabel | default "family" }}
+                    operator: In
+                    values:
+                    - {{ $cronjob.workload }}
+          {{- else }}
+          affinity: {{ $cronjob.affinity | toYaml | nindent 12}}
+          {{- end }}
+          {{- if and (empty $cronjob.tolerations) $cronjob.spot_support }}
+          tolerations:
+          - effect: NoSchedule
+            key: spot
+            operator: Exists
+          - effect: NoExecute
+            key: spot
+            operator: Exists
+          {{- else }}
+          {{- if $cronjob.tolerations }}
+          tolerations: {{ $cronjob.tolerations | toYaml | nindent 12}}
+          {{- end }}
+          {{- end }}
+          {{- if $cronjob.hostAliases}}
+          hostAliases:
+          {{ toYaml $cronjob.hostAliases | nindent 12 }}
+          {{- end}}
+{{- end }}
+{{- end }}

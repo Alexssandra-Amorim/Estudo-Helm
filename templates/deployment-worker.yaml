@@ -1,0 +1,410 @@
+{{- range .Values.workers }}
+{{- $worker := . }}
+{{- if $worker.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  {{- if or ($worker.annotations) ($.Values.vault_annotations) }}
+  annotations:
+    {{- range $key, $value := $worker.annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    {{- range $key, $value := $.Values.vault_annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+  name: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    app: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+    {{- if $worker.labels }}{{ toYaml $worker.labels | nindent 4}}{{- end }}
+spec:
+  revisionHistoryLimit: {{ $.Values.global.revisionHistoryLimit | default "3" }}
+  selector:
+    matchLabels:
+      app: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+  strategy:
+    rollingUpdate:
+      maxSurge: {{ $worker.rollingUpdateMaxSurge | default 1 }}
+      maxUnavailable: {{ $worker.rollingUpdateMaxUnavailable | default 1 }}
+    type: RollingUpdate
+  template:
+    metadata:
+      {{- if or ($worker.annotations) ($.Values.vault_annotations) }}
+      annotations:
+        {{- range $key, $value := $worker.annotations }}
+          {{ $key }}: {{ $value | quote }}
+        {{- end }}
+        {{- range $key, $value := $.Values.vault_annotations }}
+          {{ $key }}: {{ $value | quote }}
+        {{- end }}
+      {{- end }}
+      labels:
+        namespace: ms-{{ $.Values.global.app_name }}
+        bu: {{ $.Values.global.bu }}
+        app: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+        release: {{ $.Release.Name }}
+        releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+        managed-by: "harness"
+        timestamp: {{ date "20060102150405" $.now | quote }}
+        version: {{ $.Values.global.image.tag }}
+        {{- if $.Values.global.jvm_metrics.enabled}}
+        jvm-metrics: enabled
+        {{- end}}
+        {{- if $.Values.global.metrics.enabled}}
+        metrics: enabled
+        {{- end}}
+        backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+        {{- if $worker.labels }}{{ toYaml $worker.labels | nindent 8}}{{- end }}
+    spec:
+      {{- if $worker.priority -}}
+      priorityClassName: {{ $worker.priority }}
+      {{- end }}
+      {{- if not (empty $.Values.global.worker_roleArn) }}
+      serviceAccountName: {{ $.Values.global.app_name }}-worker-sa
+      {{- end }}
+      {{- if or ($worker.volumes) ($.Values.global.otelcol.enabled) }}
+      volumes:
+        {{- if $.Values.global.otelcol.enabled }}
+        - name: otelcol-config
+          configMap:
+            name: otelcol-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        {{- end}}
+        {{- with $worker.volumes -}}
+            {{ toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end}}
+       {{- if $worker.initContainers }}
+      initContainers:
+      {{- with $worker.initContainers -}}
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- if $worker.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ $worker.terminationGracePeriodSeconds }}
+      {{- end }}
+      containers:
+      {{- if $.Values.global.otelcol.enabled }}
+      - name: otelcol
+        imagePullPolicy: IfNotPresent
+        image: {{ $.Values.global.otelcol.image }}:{{ $.Values.global.otelcol.version }}
+        resources:
+          limits:
+            cpu: {{ $.Values.global.otelcol.cpu }}
+            memory: {{ $.Values.global.otelcol.memory }}
+          requests:
+            cpu: {{ $.Values.global.otelcol.cpu }}
+            memory: {{ $.Values.global.otelcol.memory }}
+        {{- if $worker.envFrom }}
+        envFrom: {{ toYaml $worker.envFrom | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+          - name: otelcol-config
+            mountPath: /etc/otelcol-contrib
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: {{ ($worker.readiness).initialDelaySeconds | default 5 }}
+          periodSeconds: 5
+      {{- end}}
+      {{- if $worker.sidecar }}
+      {{- range $worker.sidecar }}
+      - name: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}-{{ .name }}
+        image: {{ .image }}
+        imagePullPolicy: {{ .imagePullPolicy | default "IfNotPresent" }}
+        {{- if $worker.lifecycle }}
+        lifecycle:
+        {{- if $worker.lifecycle.postStart }}
+          postStart:
+            exec:
+              command:
+                {{- range $worker.lifecycle.postStart }}
+                - {{ . }}
+                {{- end }}
+        {{- end}}
+        {{- if $worker.lifecycle.preStop }}
+          preStop:
+            exec:
+              command:
+                {{- range $worker.lifecycle.preStop }}
+                - {{ . | quote}}
+                {{- end }}
+        {{- end}}
+        {{- end }}
+        {{- if .volumeMounts }}
+        volumeMounts:
+          {{- range .volumeMounts }}
+          - name: {{ .name }}
+            mountPath: {{ .mountPath }}
+          {{- end }}
+        {{- end }}
+        {{- if .command }}
+        command: {{ .command }}
+        {{- end }}
+        {{- if .args }}
+        args: {{ toJson .args }}
+        {{- end }}
+        {{- if .env }}
+        env: {{ toYaml .env | nindent 8 }}
+        {{- end }}
+        {{- if .envFrom }}
+        envFrom: {{ toYaml .envFrom | nindent 8 }}
+        {{- end}}
+        resources:
+          limits:
+            {{- if .limits_cpu }}
+            cpu: {{ .limits_cpu }}
+            {{- end }}
+            memory: {{ .limits_memory | default "256Mi" }}
+          requests:
+            cpu: {{ .requests_cpu | default "100m" }}
+            memory: {{ .requests_memory | default "128Mi" }}
+      {{- end}}
+      {{- end}}
+      - name: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+        {{- if not $worker.tag }}
+        image: {{ $worker.image }}:{{ $.Values.global.image.tag }}
+        {{- else }}
+        image: {{ $worker.image }}:{{ $worker.tag }}
+        {{- end }}
+        {{- if $worker.lifecycle }}
+        lifecycle:
+        {{- if $worker.lifecycle.postStart }}
+          postStart:
+            exec:
+              command:
+                {{- range $worker.lifecycle.postStart }}
+                - {{ . }}
+                {{- end }}
+        {{- end}}
+        {{- if $worker.lifecycle.preStop }}
+          preStop:
+            exec:
+              command:
+                {{- range $worker.lifecycle.preStop }}
+                - {{ . | quote}}
+                {{- end }}
+        {{- end}}
+        {{- end }}
+        imagePullPolicy: {{ .imagePullPolicy | default "IfNotPresent" }}
+        {{- if $worker.volumeMounts }}
+        volumeMounts:
+          {{- range $worker.volumeMounts }}
+          - name: {{ .name }}
+            mountPath: {{ .mountPath }}
+          {{- end }}
+        {{- end }}
+        {{- if $worker.command }}
+        command: [ {{ $worker.command | quote }} ]
+        {{- end }}
+        {{- if $worker.args }}
+        {{- if eq (kindOf $worker.args) "slice" }}
+        args: {{ toJson $worker.args}}
+        {{- end }}
+        {{- if eq (kindOf $worker.args) "string" }}
+        args: [ {{ $worker.args | quote }} ]
+        {{- end }}
+        {{- end }}
+        {{- if .containerPort }}
+        ports:
+        - name: container-port
+          containerPort: {{ .containerPort }}
+          protocol: TCP
+        {{- end }}
+        env:
+        - name: APP_NAME
+          value: {{ $.Values.global.app_name }}
+        - name: APP_WORKER_NAME
+          value: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+        - name: APP_STAGE
+          value: {{ $.Values.global.app_stage }}
+        {{- if $worker.env }}{{ toYaml $worker.env | nindent 8}}{{- end }}
+        {{- if $worker.envFrom }}
+        envFrom: {{ toYaml $worker.envFrom | nindent 8}}
+        {{- end }}
+        resources:
+          limits:
+            cpu: {{ $worker.limits_cpu | default $worker.request_cpu }}
+            memory: {{ $worker.limits_memory | default $worker.request_memory }}
+          requests:
+            cpu: {{ $worker.requests_cpu }}
+            memory: {{ $worker.requests_memory }}
+        {{- if not (empty .startup) }}
+        startupProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get $worker.health "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if ne (get $worker.health "path") "" }}
+          httpGet:
+            path: {{ $worker.health.path }}
+            port: container-port
+          {{- else if $worker.health.command }}
+          exec:
+            command:
+            {{- range $worker.health.command }}
+              - {{ . | quote}}
+            {{- end }}
+          {{- end}}
+          {{- else }}
+          {{- if ne (get $worker.startup "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if $worker.startup.command }}
+          exec:
+            command:
+            {{- range $worker.startup.command }}
+              - {{ . | quote}}
+            {{- end }}
+          {{- else if ne (get $worker.startup.httpGet "path") "" }}
+          httpGet:
+            path: {{ $worker.startup.httpGet.path }}
+            port: container-port
+          {{- end}}
+          {{- end }}
+          {{- with $worker.startup }}
+          initialDelaySeconds: {{ default 10 .initialDelaySeconds }}
+          periodSeconds: {{ default 5 .periodSeconds }}
+          successThreshold: {{ default 1 .successThreshold }}
+          failureThreshold: {{ default 3 .failureThreshold }}
+          timeoutSeconds: {{ default 3 .timeoutSeconds }}
+          {{- end }}
+        {{- end}}
+        {{- if not (empty .liveness) }}
+        livenessProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get $worker.health "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if ne (get $worker.health "path") "" }}
+          httpGet:
+            path: {{ $worker.health.path }}
+            port: container-port
+          {{- else if $worker.health.command }}
+          exec:
+            command:
+            {{- range $worker.health.command }}
+              - {{ . | quote}}
+            {{- end }}
+          {{- end}}
+          {{- else }}
+          {{- if ne (get $worker.liveness "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if $worker.liveness.command }}
+          exec:
+            command:
+            {{- range $worker.liveness.command }}
+              - {{ . | quote}}
+            {{- end }}
+          {{- else if ne (get $worker.liveness.httpGet "path") "" }}
+          httpGet:
+            path: {{ $worker.liveness.httpGet.path }}
+            port: container-port
+          {{- end}}
+          {{- end }}
+          {{- with $worker.liveness }}
+          initialDelaySeconds: {{ default 60 .initialDelaySeconds }}
+          periodSeconds: {{ default 30 .periodSeconds }}
+          successThreshold: {{ default 1 .successThreshold }}
+          failureThreshold: {{ default 3 .failureThreshold }}
+          timeoutSeconds: {{ default 3 .timeoutSeconds }}
+          {{- end }}
+        {{- end}}
+        {{- if not (empty .readiness) }}
+        readinessProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get $worker.health "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if ne (get $worker.health "path") "" }}
+          httpGet:
+            path: {{ $worker.health.path }}
+            port: container-port
+          {{- else if $worker.health.command }}
+          exec:
+            command:
+            {{- range $worker.health.command }}
+              - {{ . | quote}}
+            {{- end }}
+          {{- end }}
+          {{- else }}
+          {{- if $worker.readiness.command }}
+          exec:
+            command:
+            {{- range $worker.readiness.command }}
+              - {{ . | quote}}
+            {{- end }}
+          {{- else if ne (get $worker.readiness.httpGet "path") "" }}
+          httpGet:
+            path: {{ $worker.readiness.httpGet.path }}
+            port: container-port
+          {{- end }}
+          {{- end }}
+          {{- with $worker.readiness }}
+          initialDelaySeconds: {{ default 0 .initialDelaySeconds }}
+          periodSeconds: {{ default 30 .periodSeconds }}
+          successThreshold: {{ default 1 .successThreshold }}
+          failureThreshold: {{ default 3 .failureThreshold }}
+          timeoutSeconds: {{ default 3 .timeoutSeconds }}
+          {{- end }}
+        {{- end}}
+      {{- if empty $worker.affinity }}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: karpenter.sh/capacity-type
+                operator: In
+                values:
+                - spot
+            weight: 100
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: {{ $worker.workloadLabel | default "family" }}
+                operator: In
+                values:
+                - {{ $worker.workload }}
+      {{- else }}
+      affinity:
+{{ $worker.affinity | toYaml | indent 8}}
+      {{- end }}
+      {{- if and (empty $worker.tolerations) ($worker.spot_support | default true) }}
+      tolerations:
+        - effect: NoSchedule
+          key: spot
+          operator: Exists
+        - effect: NoExecute
+          key: spot
+          operator: Exists
+      {{- else }}
+      tolerations:
+{{ $worker.tolerations | toYaml | indent 8}}
+      {{- end }}
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+{{- if $worker.hostAliases}}
+      hostAliases:
+{{ toYaml $worker.hostAliases | indent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,85 @@
+{{- if $.Values.global.otelcol.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otelcol-config
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+data:
+  config.yaml: |
+    receivers:
+      statsd:
+      jaeger:
+        protocols:
+          thrift_binary:
+          thrift_http:
+      {{- if $.Values.global.otelcol.prometheus }}
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'otel-collector'
+              scrape_interval: 5s
+              static_configs:
+                - targets: [ '0.0.0.0:9503' ]
+      {{- end }}
+
+    processors:
+      metricstransform:
+        transforms:
+          - include: .*
+            match_type: regexp
+            action: update
+            operations:
+              - action: add_label
+                new_label: service.name
+                new_value: ${NEW_RELIC_APP_NAME}
+
+    exporters:
+      {{- if $.Values.global.otelcol.newrelic }}
+      otlp:
+        endpoint: https://otlp.nr-data.net:443
+        headers:
+          api-key: ${NEW_RELIC_LICENSE_KEY}
+      otlp/2:
+        endpoint: https://otlp.nr-data.net:443
+        headers:
+          api-key: ${NEW_RELIC_LICENSE_KEY}
+      {{- else }}
+      otlp:
+        endpoint: traces.opentelemetry.svc.cluster.local:4317
+        tls:
+          insecure: true
+      otlp/2:
+        endpoint: metrics.opentelemetry.svc.cluster.local:4317
+        tls:
+          insecure: true
+      {{- end }}
+      prometheus:
+        endpoint: "0.0.0.0:9502"
+    
+    extensions:
+      health_check:
+    
+    service:
+      extensions:
+        - health_check
+      pipelines:
+        traces:
+          receivers: [ jaeger ]
+          exporters: [ otlp ]
+        metrics:
+          {{- if $.Values.global.otelcol.prometheus }}
+          receivers: [ prometheus ]
+          {{- else }}
+          receivers: [ statsd ]
+          {{- end }}
+          processors: [ metricstransform ]
+          exporters: [ otlp/2, prometheus ]
+{{- end }}
+

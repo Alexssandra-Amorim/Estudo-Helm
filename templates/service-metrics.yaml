@@ -1,0 +1,33 @@
+{{- if and ($.Values.global.metrics.enabled) (ne (or $.Values.global.metrics.useExistingServices false) true)  }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  {{- if $.Values.global.metrics.annotations }}
+  annotations:
+    {{- range $key, $value := $.Values.global.metrics.annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+  name: {{ $.Values.global.app_name }}-service-metrics
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    app: {{ $.Values.global.app_name }}-metrics
+    metrics: enabled
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+spec:
+  ports:
+  - port: {{ $.Values.global.metrics.port }}
+    protocol: TCP
+    targetPort: {{ $.Values.global.metrics.port }}
+    name: exporter
+  selector:
+    metrics: enabled
+    namespace: ms-{{ $.Values.global.app_name }}
+  sessionAffinity: None
+  type: {{ default "ClusterIP" $.Values.global.metrics.type }}
+{{- end }}

@@ -1,0 +1,633 @@
+{{- range .Values.apis }}
+{{- $api := . }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  {{- if or ($api.annotations) ($.Values.vault_annotations) }}
+  annotations:
+    {{- range $key, $value := $api.annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    {{- range $key, $value := $.Values.vault_annotations }}
+      {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+  name: {{ $.Values.global.app_name }}-{{ $api.name }}
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    app: {{ $.Values.global.app_name }}-{{ $api.name }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+    {{- if $api.labels }}{{ toYaml $api.labels | nindent 4}}{{- end }}
+spec:
+  revisionHistoryLimit: {{ $.Values.global.revisionHistoryLimit | default "3" }}
+  progressDeadlineSeconds: {{ $.Values.global.progressDeadlineSeconds | default "600" }}
+  strategy:
+    rollingUpdate:
+      maxSurge: {{ $api.rollingUpdateMaxSurge | default "25%" }}
+      maxUnavailable: {{ $api.rollingUpdateMaxUnavailable | default "0" }}
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: {{ $.Values.global.app_name }}-{{ $api.name }}
+  template:
+    metadata:
+      {{- if or ($api.annotations) ($.Values.vault_annotations) }}
+      annotations:
+        {{- range $key, $value := $api.annotations }}
+          {{ $key }}: {{ $value | quote }}
+        {{- end }}
+        {{- range $key, $value := $.Values.vault_annotations }}
+          {{ $key }}: {{ $value | quote }}
+        {{- end }}
+      {{- end }}
+      labels:
+        namespace: ms-{{ $.Values.global.app_name }}
+        bu: {{ $.Values.global.bu }}
+        app: {{ $.Values.global.app_name }}-{{ $api.name }}
+        release: {{ $.Release.Name }}
+        releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+        managed-by: "harness"
+        version: {{ $.Values.global.image.tag }}
+        timestamp: {{ date "20060102150405" $.now | quote }}
+        {{- if $.Values.global.jvm_metrics.enabled}}
+        jvm-metrics: enabled
+        {{- end}}
+        {{- if $.Values.global.metrics.enabled}}
+        metrics: enabled
+        {{- end}}
+        backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+        {{- if $api.labels }}{{ toYaml $api.labels | nindent 8}}{{- end }}
+    spec:
+      {{- if $api.priority -}}
+      priorityClassName: {{ $api.priority }}
+      {{- end }}
+      {{- if not (empty $.Values.global.api_roleArn) }}
+      serviceAccountName: {{ $.Values.global.app_name }}-api-sa
+      {{- end }}
+      {{- if or ($api.volumes) ($.Values.global.otelcol.enabled) }}
+      volumes:
+        {{- if $.Values.global.otelcol.enabled }}
+        - name: otelcol-config
+          configMap:
+            name: otelcol-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        {{- end}}
+        {{- with $api.volumes -}}
+            {{ toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end}}
+      {{- if $api.initContainers }}
+      initContainers:
+      {{- with $api.initContainers -}}
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- if $api.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ $api.terminationGracePeriodSeconds }}
+      {{- end }}
+      containers:
+      {{- if $.Values.global.otelcol.enabled }}
+      - name: otelcol
+        imagePullPolicy: IfNotPresent
+        image: {{ $.Values.global.otelcol.image }}:{{ $.Values.global.otelcol.version }}
+        resources:
+          limits:
+            cpu: {{ $.Values.global.otelcol.cpu }}
+            memory: {{ $.Values.global.otelcol.memory }}
+          requests:
+            cpu: {{ $.Values.global.otelcol.cpu }}
+            memory: {{ $.Values.global.otelcol.memory }}
+        {{- if  $api.envFrom }}
+        envFrom: {{ toYaml  $api.envFrom | nindent 10 }}
+        {{- end}}
+        volumeMounts:
+          - name: otelcol-config
+            mountPath: /etc/otelcol-contrib
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: {{ $api.liveness.initialDelaySeconds | default 6}}
+          periodSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: {{ $api.readiness.initialDelaySeconds | default 5}}
+          periodSeconds: 5
+      {{- end}}
+      {{- if $api.sidecar }}
+      {{- range $api.sidecar }}
+      - name: {{ $.Values.global.app_name }}-{{ .name }}
+        imagePullPolicy: {{ .imagePullPolicy | default "IfNotPresent" }}
+        image: {{ .image }}
+        {{- if .containerPort }}
+        ports:
+        - name: container-port
+          containerPort: {{ .containerPort }}
+          protocol: TCP
+        {{- end }}
+        {{- if .volumeMounts }}
+        volumeMounts:
+          {{- range .volumeMounts }}
+          - name: {{ .name }}
+            mountPath: {{ .mountPath }}
+          {{- end }}
+        {{- end }}
+        resources:
+          limits:
+            {{- if .limits_cpu }}
+            cpu: {{ .limits_cpu }}
+            {{- end }}
+            memory: {{ .limits_memory | default "256Mi" }}
+          requests:
+            cpu: {{ .requests_cpu | default "100m" }}
+            memory: {{ .requests_memory | default "128Mi" }}
+        {{- if not (empty .startup) }}
+        startupProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get .health "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if ne (get .health "path") "" }}
+          httpGet:
+            path: {{ .health.path }}
+            port: container-port
+          {{- else if .health.command }}
+          exec:
+            command:
+            {{- range .health.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- end}}
+          {{- else}}
+          {{- if ne (get .startup "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if ne (get .startup.httpGet "path") "" }}
+          httpGet:
+            path: {{ .startup.httpGet.path }}
+            port: container-port
+          {{- else if .startup.command }}
+          exec:
+            command:
+            {{- range .startup.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- end}}
+          {{- end}}
+          initialDelaySeconds: {{ default 10 .startup.initialDelaySeconds }}
+          periodSeconds: {{ default 5 .startup.periodSeconds }}
+          successThreshold: {{ default 1 .startup.successThreshold }}
+          failureThreshold: {{ default 3 .startup.failureThreshold }}
+          timeoutSeconds: {{ default 3 .startup.timeoutSeconds }}
+        {{- end}}
+        {{- if not (empty .liveness) }}
+        livenessProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get .health "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if ne (get .health "path") "" }}
+          httpGet:
+            path: {{ .health.path }}
+            port: container-port
+          {{- else if .health.command }}
+          exec:
+            command:
+            {{- range .health.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- end}}
+          {{- else}}
+          {{- if ne (get .liveness "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if ne (get .liveness.httpGet "path") "" }}
+          httpGet:
+            path: {{ .liveness.httpGet.path }}
+            port: container-port
+          {{- else if .liveness.command }}
+          exec:
+            command:
+            {{- range .liveness.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- end}}
+          {{- end}}
+          initialDelaySeconds: {{ default 30 .liveness.initialDelaySeconds }}
+          periodSeconds: {{ default 10 .liveness.periodSeconds }}
+          successThreshold: {{ default 1 .liveness.successThreshold }}
+          failureThreshold: {{ default 3 .liveness.failureThreshold }}
+          timeoutSeconds: {{ default 3 .liveness.timeoutSeconds }}
+        {{- end}}
+        {{- if not (empty .readiness) }}
+        readinessProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get .health "tcp") "" }}
+          tcpSocket:
+            port: container-port
+          {{- else if ne (get .health "path") "" }}
+          httpGet:
+            path: {{ .health.path }}
+            port: container-port
+          {{- else if .health.command }}
+          exec:
+            command:
+            {{- range .health.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- end }}
+          {{- else}}
+          {{- if ne (get .readiness.httpGet "path") "" }}
+          httpGet:
+            path: {{ .readiness.httpGet.path }}
+            port: container-port
+          {{- else if .readiness.command }}
+          exec:
+            command:
+            {{- range .readiness.command}}
+              - {{ . | quote}}
+            {{- end }}
+          {{- end }}
+          {{- end }}
+          initialDelaySeconds: {{ default 20 .readiness.initialDelaySeconds }}
+          periodSeconds: {{ default 5 .readiness.periodSeconds }}
+          successThreshold: {{ default 1 .readiness.successThreshold }}
+          failureThreshold: {{ default 3 .readiness.failureThreshold }}
+          timeoutSeconds: {{ default 3 .readiness.timeoutSeconds }}
+        {{- end}}
+        {{- if .command }}
+        command: {{ .command }}
+        {{- end }}
+        {{- if .args }}
+        args: {{ toJson .args }}
+        {{- end }}
+        env:
+        - name: APP_NAME
+          value: {{ $.Values.global.app_name }}
+        - name: APP_STAGE
+          value: {{ $.Values.global.app_stage }}
+        {{- if .env }}{{ toYaml .env | nindent 8}}{{- end }}
+        {{- if .envFrom }}
+        envFrom: {{ toYaml .envFrom | nindent 8 }}
+        {{- end}}
+      {{- end }}
+      {{- end }}
+      - name: {{ $.Values.global.app_name }}-{{ $api.name }}
+        image: {{ $api.image.repositoryURI }}:{{ $api.image.tag | default $.Values.global.image.tag }}
+        {{- if $api.lifecycle }}
+        lifecycle:
+        {{- if $api.lifecycle.postStart }}
+          postStart:
+            exec:
+              command:
+                {{- range $api.lifecycle.postStart }}
+                - {{ . }}
+                {{- end }}
+        {{- end}}
+        {{- if $api.lifecycle.preStop }}
+          preStop:
+            exec:
+              command:
+                {{- range $api.lifecycle.preStop }}
+                - {{ . | quote}}
+                {{- end }}
+        {{- end}}
+        {{- end }}
+        imagePullPolicy: {{ .imagePullPolicy | default "IfNotPresent" }}
+        {{- if $api.containerPort }}
+        ports:
+        - name: container-port
+          containerPort: {{ $api.containerPort }}
+          protocol: TCP
+        {{- if $api.healthcheckPort }}
+        - name: health-port
+          containerPort: {{ $api.healthcheckPort }}
+          protocol: TCP
+        {{- end }}
+        {{- end }}
+        {{- if ($api.multiPortContainer).enabled }}
+        ports:
+        {{- range $api.multiPortContainer.ports }}
+        - name: {{ .name }}
+          containerPort: {{ .containerPort }}
+          protocol: TCP
+        {{- end }}
+        {{- end }}
+        {{- if $api.volumeMounts }}
+        volumeMounts:
+          {{- range $api.volumeMounts }}
+          - name: {{ .name }}
+            mountPath: {{ .mountPath }}
+          {{- end }}
+        {{- end }}
+        {{- if eq (kindOf $api.command) "slice" }}
+        command: {{ toJson $api.command }}
+        {{- else if eq (kindOf $api.command) "string" }}
+        command: [ {{ $api.command | quote }} ]
+        {{- end }}
+        {{- if eq (kindOf $api.args) "slice" }}
+        args: {{ toJson $api.args }}
+        {{- else }}
+        args: [ {{ $api.args | quote }} ]
+        {{- end }}
+        env:
+        - name: APP_NAME
+          value: {{ $.Values.global.app_name }}
+        - name: APP_STAGE
+          value: {{ $.Values.global.app_stage }}
+        {{- if $api.env }}{{ toYaml $api.env | nindent 8}}{{- end }}
+        {{- if $api.envFrom }}
+        envFrom: {{ toYaml $api.envFrom | nindent 8}}
+        {{- end }}
+        {{- if (($api.startup).enabled) }}
+        startupProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get $api.health "tcp") "" }}
+          tcpSocket:
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- else if ne (get $api.health "path") "" }}
+          httpGet:
+            path: {{ $api.health.path }}
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- else if $api.health.command }}
+          exec:
+            command:
+            {{- range .health.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- end}}
+          {{- else }}
+          {{- if ne (get $api.startup "tcp") "" }}
+          tcpSocket:
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- else if $api.startup.command }}
+          exec:
+            command:
+            {{- range $api.startup.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- else if ne (get $api.startup.httpGet "path") "" }}
+          httpGet:
+            path: {{ $api.startup.httpGet.path }}
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- end}}
+          {{- end }}
+          {{- with $api.startup }}
+          initialDelaySeconds: {{ default 10 .initialDelaySeconds }}
+          periodSeconds: {{ default 5 .periodSeconds }}
+          successThreshold: {{ default 1 .successThreshold }}
+          failureThreshold: {{ default 3 .failureThreshold }}
+          timeoutSeconds: {{ default 3 .timeoutSeconds }}
+          {{- end }}
+        {{- end}}
+        {{- if or ($api.readiness.enabled) (not (hasKey $api.readiness "enabled")) }}
+        readinessProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get $api.health "tcp") "" }}
+          tcpSocket:
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- else if ne (get $api.health "path") "" }}
+          httpGet:
+            path: {{ $api.health.path }}
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- else if $api.health.command }}
+          exec:
+            command:
+            {{- range .health.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- end}}
+          {{- else}}
+          {{- if $api.readiness.command }}
+          exec:
+            command:
+            {{- range $api.readiness.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- else if ne (get $api.readiness.httpGet "path") "" }}
+          httpGet:
+            path: {{ $api.readiness.httpGet.path }}
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.readiness.httpGet.port }}
+            port: {{ $api.readiness.httpGet.port }}
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- end}}
+          {{- end}}
+          {{- with $api.readiness }}
+          initialDelaySeconds: {{ default 20 .initialDelaySeconds }}
+          periodSeconds: {{ default 5 .periodSeconds }}
+          successThreshold: {{ default 1 .successThreshold }}
+          failureThreshold: {{ default 3 .failureThreshold }}
+          timeoutSeconds: {{ default 3 .timeoutSeconds }}
+          {{- end }}
+        {{- end}}
+        {{- if or ($api.liveness.enabled) (not (hasKey $api.liveness "enabled")) }}
+        livenessProbe:
+          {{- if not (empty .health) }}
+          {{- if ne (get $api.health "tcp") "" }}
+          tcpSocket:
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- else if ne (get $api.health "path") "" }}
+          httpGet:
+            path: {{ $api.health.path }}
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- else if $api.health.command }}
+          exec:
+            command:
+            {{- range .health.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- end}}
+          {{- else }}
+          {{- if ne (get $api.liveness "tcp") "" }}
+          tcpSocket:
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- else if $api.liveness.command }}
+          exec:
+            command:
+            {{- range $api.liveness.command}}
+              - {{ . | quote}}
+            {{- end}}
+          {{- else if ne (get $api.liveness.httpGet "path") "" }}
+          httpGet:
+            path: {{ $api.liveness.httpGet.path }}
+            {{- if $api.healthcheckPort }}
+            port: health-port
+            {{- else if $api.readiness.httpGet.port }}
+            port: {{ $api.readiness.httpGet.port }}
+            {{- else if $api.health.portName }}
+            port: {{ $api.health.portName }}
+            {{- else }}
+            port: container-port
+            {{- end}}
+          {{- end}}
+          {{- end }}
+          {{- with $api.liveness }}
+          initialDelaySeconds: {{ default 30 .initialDelaySeconds }}
+          periodSeconds: {{ default 10 .periodSeconds }}
+          successThreshold: {{ default 1 .successThreshold }}
+          failureThreshold: {{ default 3 .failureThreshold }}
+          timeoutSeconds: {{ default 3 .timeoutSeconds }}
+          {{- end }}
+        {{- end}}
+        resources:
+          limits:
+            {{- if $api.limits_cpu }}
+            cpu: {{ $api.limits_cpu }}
+            {{- end }}
+            memory: {{ $api.limits_memory | default "256Mi" }}
+          requests:
+            cpu: {{ $api.requests_cpu | default "100m" }}
+            memory: {{ $api.requests_memory | default "128Mi" }}
+      {{- if empty $api.affinity }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: {{ $api.workloadLabel | default "family" }}
+                operator: In
+                values:
+                - {{ $api.workload }}
+        {{- if $api.spot_percentage }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - preference:
+                matchExpressions:
+                - key: karpenter.sh/capacity-type
+                  operator: In
+                  values:
+                  - spot
+              weight: {{ $api.spot_percentage }}
+        {{- else if $api.ondemand_percentage }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - preference:
+                matchExpressions:
+                - key: karpenter.sh/capacity-type
+                  operator: In
+                  values:
+                  - on-demand
+              weight: {{ $api.ondemand_percentage }}
+        {{- end }}
+        {{- if $api.onePodPerNode }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ $.Values.global.app_name }}-{{ $api.name }}
+              topologyKey: kubernetes.io/hostname
+        {{- end }}
+      {{- else }}
+      affinity:
+      {{- if $api.onePodPerNode }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ $.Values.global.app_name }}-{{ $api.name }}
+              topologyKey: kubernetes.io/hostname
+      {{- end }}
+{{ $api.affinity | toYaml | indent 8}}
+      {{- end }}
+      {{- if empty $api.tolerations }}
+      tolerations:
+        - effect: NoSchedule
+          key: spot
+          operator: Exists
+        - effect: NoExecute
+          key: spot
+          operator: Exists
+      {{- else }}
+      tolerations:
+{{ $api.tolerations | toYaml | indent 8}}
+      {{- end }}
+{{- if $api.onePodPerNode }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: {{ $.Values.global.app_name }}-{{ $api.name }}
+{{- end }}
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+{{- if $api.hostAliases}}
+      hostAliases:
+{{ toYaml $api.hostAliases | indent 6 }}
+{{- end}}
+{{- end }}

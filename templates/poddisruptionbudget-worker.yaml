@@ -1,0 +1,23 @@
+{{- range .Values.workers }}
+  {{ $worker := . }}
+  {{- if $worker.podDisruptionBudget }}{{ if $worker.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}-pdb
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    app: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+spec:
+  minAvailable: {{ $worker.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+  {{- end }}{{ end }}
+  {{- end }}

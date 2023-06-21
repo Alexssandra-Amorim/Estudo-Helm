@@ -1,0 +1,103 @@
+{{- range .Values.apis }}
+{{ $api := . }}
+{{- with $api.ingress }}
+{{- range $i, $ingress := . }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  {{- if $ingress.name }}
+  name: {{ $ingress.name }}
+  {{- else }}
+  name: {{ $api.name }}-{{ $ingress.type }}
+  {{- end }}
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+  {{- if $ingress.annotations }}
+  annotations:
+    {{- range $key, $value := $ingress.annotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  {{- if $ingress.type }}
+  ingressClassName: {{ $ingress.type }}
+  {{- end }}
+  {{- if $ingress.class }}
+  ingressClassName: {{ $ingress.class }}
+  {{- end }}
+  rules:
+    {{- range $ingress.http }}
+    - http:
+        paths: 
+          - path: {{ .path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ hasKey . "serviceName" | ternary .serviceName (printf "%s-%s" $.Values.global.app_name $api.name) }}
+                port:
+                  {{- if (kindIs "string" .servicePort) }}
+                  name: {{ hasKey . "servicePort" | ternary .servicePort ($api.service).port }}
+                  {{- else }}
+                  number: {{ hasKey . "servicePort" | ternary .servicePort ($api.service).port }}
+                  {{- end }}
+    {{- end  }}
+    {{- range $ingress.hosts }}
+    - host: {{ .hostname }}
+      http:
+        paths:
+          {{- if $ingress.path }}
+          - path: {{ $ingress.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ hasKey . "serviceName" | ternary .serviceName (printf "%s-%s" $.Values.global.app_name $api.name) }}
+                port:
+                  {{- if (kindIs "string" .servicePort) }}
+                  name: {{ hasKey . "servicePort" | ternary .servicePort ($api.service).port }}
+                  {{- else }}
+                  number: {{ hasKey . "servicePort" | ternary .servicePort ($api.service).port }}
+                  {{- end }}
+          {{- else if .path }}
+          - path: {{ .path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ hasKey . "serviceName" | ternary .serviceName (printf "%s-%s" $.Values.global.app_name $api.name) }}
+                port:
+                  {{- if (kindIs "string" .servicePort) }}
+                  name: {{ hasKey . "servicePort" | ternary .servicePort ($api.service).port }}
+                  {{- else }}
+                  number: {{ hasKey . "servicePort" | ternary .servicePort ($api.service).port }}
+                  {{- end }}
+          {{- else }}
+          - backend:
+              service:
+                name: {{ hasKey . "serviceName" | ternary .serviceName (printf "%s-%s" $.Values.global.app_name $api.name) }}
+                port:
+                  {{- if (kindIs "string" .servicePort) }}
+                  name: {{ hasKey . "servicePort" | ternary .servicePort ($api.service).port }}
+                  {{- else }}
+                  number: {{ hasKey . "servicePort" | ternary .servicePort ($api.service).port }}
+                  {{- end }}
+            path: /
+            pathType: Prefix
+          {{- end  }}
+    {{- end  }}
+  {{- if $ingress.tls }}
+  tls:
+    - hosts:
+        {{- range $ingress.hosts }}
+        - {{ .hostname }}
+        {{- end}}
+      secretName: {{ $.Values.global.app_name }}-{{ $api.name }}-ingress-tls
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

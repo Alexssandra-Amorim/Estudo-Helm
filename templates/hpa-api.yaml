@@ -1,0 +1,49 @@
+{{- range .Values.apis }}
+{{ $deploy := . }}
+{{- if $deploy.hpa.enabled }}
+{{- if ne (default "vanilla" $deploy.hpa.type) "keda" }}
+---
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $.Values.global.app_name }}-{{ $deploy.name }}
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+    {{- range $key, $value := $deploy.hpa.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  minReplicas: {{ $deploy.hpa.min }}
+  maxReplicas: {{ $deploy.hpa.max }}
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $.Values.global.app_name }}-{{ $deploy.name }}
+  {{- if hasKey $deploy.hpa "metrics" }}
+  metrics: {{ toYaml $deploy.hpa.metrics | nindent 4 }}
+  {{- else }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization:  {{ $deploy.hpa.targetCPU | default 60 }}
+    {{- if $deploy.hpa.targetMemory }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $deploy.hpa.targetMemory }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

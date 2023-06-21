@@ -1,0 +1,6 @@
+version = 1
+merge.message.include_pull_request_author = true
+merge.message.title = "pull_request_title"
+merge.message.body = "pull_request_body"
+automerge_label = "automerge"
+update.always = false

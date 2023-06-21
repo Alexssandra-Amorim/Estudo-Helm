@@ -1,0 +1,50 @@
+{{- range .Values.workers }}
+{{- $worker := . }}
+{{- if $worker.hpa.enabled }}
+{{- if ne (default "vanilla" $worker.hpa.type) "keda" }}
+
+---
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+  namespace: ms-{{ $.Values.global.app_name }}
+  labels:
+    namespace: ms-{{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    release: {{ $.Release.Name }}
+    releaseNumber: {{ $.Values.global.releaseNumber | quote }}
+    managed-by: "harness"
+    backstage.io/kubernetes-id: ms-{{ $.Values.global.app_name }}
+    {{- range $key, $value := $worker.hpa.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  minReplicas: {{ $worker.hpa.min }}
+  maxReplicas: {{ $worker.hpa.max }}
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $.Values.global.app_name }}-worker-{{ $worker.name }}
+  {{- if hasKey $worker.hpa "metrics" }}
+  metrics: {{ toYaml $worker.hpa.metrics | nindent 4 }}
+  {{- else }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization:  {{ $worker.hpa.targetCPU | default 60 }}
+    {{- if $worker.hpa.targetMemory }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $worker.hpa.targetMemory }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

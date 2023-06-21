@@ -1,0 +1,14 @@
+---
+{{- if not .Values.global.create_namespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ms-{{ $.Values.global.app_name }}
+  labels:
+    name: ms-{{ $.Values.global.app_name }}
+    project: {{ $.Values.global.app_name }}
+    bu: {{ $.Values.global.bu }}
+    {{- range $key, $value := $.Values.global.namespace.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+{{- end }}

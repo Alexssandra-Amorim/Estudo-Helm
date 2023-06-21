@@ -1,0 +1,109 @@
+global:
+  app_stage: qa
+  api_roleArn: arn:aws:iam::888888888888:role/example-a-qa    # indica qual a role para o serviceAccount da API 
+  worker_roleArn: arn:aws:iam::888888888888:role/example-b-qa # indica qual a role para o serviceAccount do worker ou cronjob
+  externalSecrets: 
+    enabled: true
+    type: vault 
+    mountPath: kubernetes-example-use1-hom
+    path: kv/example/hom
+
+    
+Helm-ms-v2:
+  apis:
+    - name: api
+      image:
+        repositoryURI: accountID.dkr.ecr.us-east-1.amazonaws.com/dev/example
+      containerPort: 8080
+      workload: example-workload
+      service:
+        enabled: true
+        port: 80
+        targetPort: 8080
+      ingress:
+        - enabled: true
+          type: internal-microservices
+          hosts:
+            - hostname: example.ms.qa
+            - hostname: example.example.com
+      hpa:
+        enabled: true
+        max: 3
+        min: 1
+        targetCPU: 80
+      envFrom:
+        - secretRef:
+            name: envs
+      limits_memory: 100Mi
+      limits_cpu: 500m
+      requests_cpu: 100m
+      requests_memory: 100Mi
+      health:
+        path: /health
+      readiness:
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+        timeoutSeconds: 5
+      liveness:
+        initialDelaySeconds: 25
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+        timeoutSeconds: 5
+      lifecycle:
+        preStop:
+          - /bin/sh
+          - '-c'
+          - sleep 5 && kill -QUIT 1
+
+  workers:
+    - name: example-batch
+      image: AccountID.dkr.ecr.us-east-1.amazonaws.com/dev/example
+      enabled: true
+      command: /bin/sh
+      args: "-c while true; do echo hello; sleep 10; done"
+      workload: example-workload-2
+      limits_memory: 800Mi
+      requests_memory: 800Mi
+      limits_cpu: 1000m
+      requests_cpu: 250m
+      hpa:
+        enabled: true
+        min: 1
+        max: 10
+      envFrom:
+        - secretRef:
+            name: envs
+      health:
+        command:
+          - echo
+          - healthy
+      readiness:
+        initialDelaySeconds: 120
+        periodSeconds: 10
+        successThreshold: 1
+        failureThreshold: 10
+        timeoutSeconds: 10
+      lifecycle:
+        preStop:
+          - /bin/sh
+          - '-c'
+          - sleep 15 && kill -QUIT 1
+
+
+  cronjobs:
+    - name: example-job
+      image: accountID.dkr.ecr.us-east-1.amazonaws.com/dev/example
+      enabled: true
+      workload: example-workload-3
+      memory: 200Mi
+      cpu: 100m
+      schedule: "*/10 11-17 * * *"
+      ttl: 3600
+      envFrom:
+        - secretRef:
+            name: envs
+      command: /docker-cron.sh
+      args: process-previous-day
